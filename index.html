@@ -175,7 +175,7 @@
           happiness: acc.happiness + (parseFloat(entry.happinessRating) || 0)
         }), { timeSlept: 0, steps: 0, happiness: 0 });
 
-        // Get current weight from most recent entry
+        // Get current weight from most recent entry (entries are sorted newest first)
         const currentWeight = parseFloat(entries[0].weight) || 0;
 
         return {
@@ -237,7 +237,7 @@
                 <div className="bg-white rounded-xl shadow-lg p-4">
                   <div className="flex items-center justify-between">
                     <div>
-                      <p className="text-gray-600 text-sm">Avg Weight</p>
+                      <p className="text-gray-600 text-sm">Current Weight</p>
                       <p className="text-2xl font-bold text-green-600">{averages.weight} lbs</p>
                     </div>
                     <TrendingUp className="text-green-400" size={32} />
