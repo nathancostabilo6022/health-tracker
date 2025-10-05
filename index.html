@@ -171,14 +171,16 @@
         
         const sum = entries.reduce((acc, entry) => ({
           timeSlept: acc.timeSlept + (parseFloat(entry.timeSlept) || 0),
-          weight: acc.weight + (parseFloat(entry.weight) || 0),
           steps: acc.steps + (parseFloat(entry.steps) || 0),
           happiness: acc.happiness + (parseFloat(entry.happinessRating) || 0)
-        }), { timeSlept: 0, weight: 0, steps: 0, happiness: 0 });
+        }), { timeSlept: 0, steps: 0, happiness: 0 });
+
+        // Get current weight from most recent entry
+        const currentWeight = parseFloat(entries[0].weight) || 0;
 
         return {
           timeSlept: (sum.timeSlept / entries.length).toFixed(1),
-          weight: (sum.weight / entries.length).toFixed(1),
+          weight: currentWeight.toFixed(1),
           steps: Math.round(sum.steps / entries.length),
           happiness: (sum.happiness / entries.length).toFixed(1)
         };
