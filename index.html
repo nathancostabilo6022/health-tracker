@@ -8,11 +8,28 @@
   <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
   <script src="https://cdn.tailwindcss.com"></script>
+  
+  <!-- Firebase SDKs -->
+  <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore-compat.js"></script>
 </head>
 <body>
   <div id="root"></div>
   <script type="text/babel">
     const { useState, useEffect } = React;
+
+    // Initialize Firebase
+    const firebaseConfig = {
+      apiKey: "AIzaSyCnuQB-YdxFQl6oyjED_C36Od33C5QJaq4",
+      authDomain: "health-t-62a07.firebaseapp.com",
+      projectId: "health-t-62a07",
+      storageBucket: "health-t-62a07.firebasestorage.app",
+      messagingSenderId: "844474989627",
+      appId: "1:844474989627:web:4e8bdae8792d8d3d30b01e"
+    };
+
+    firebase.initializeApp(firebaseConfig);
+    const db = firebase.firestore();
 
     // Lucide icons as inline SVG components
     const Calendar = ({ size = 24, className = "" }) => (
@@ -45,11 +62,30 @@
       </svg>
     );
 
+    const Cloud = ({ size = 24, className = "" }) => (
+      <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
+        <path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"></path>
+      </svg>
+    );
+
+    // Get yesterday's date in YYYY-MM-DD format
+    function getYesterdayDate() {
+      const yesterday = new Date();
+      yesterday.setDate(yesterday.getDate() - 1);
+      return yesterday.toISOString().split('T')[0];
+    }
+
+    // Get today's date in YYYY-MM-DD format
+    function getTodayDate() {
+      return new Date().toISOString().split('T')[0];
+    }
+
     function HealthTracker() {
       const [entries, setEntries] = useState([]);
       const [showModal, setShowModal] = useState(false);
+      const [syncing, setSyncing] = useState(false);
       const [formData, setFormData] = useState({
-        date: new Date().toISOString().split('T')[0],
+        date: getYesterdayDate(),
         timeSlept: '',
         weight: '',
         calorieBurn: '',
@@ -57,69 +93,119 @@
         steps: '',
         zepboundDosage: '',
         marijuanaUsage: 'No',
+        zoloft: 'No',
+        ocdMeds: 'No',
         bingeEating: 'No',
         happinessRating: '5'
       });
 
-      // Load data from memory on component mount
+      // Load data from Firestore on component mount
       useEffect(() => {
-        const stored = localStorage.getItem('healthEntries');
-        if (stored) {
-          setEntries(JSON.parse(stored));
-        }
+        loadEntriesFromFirestore();
+      }, []);
+
+      // Real-time sync from Firestore
+      useEffect(() => {
+        const unsubscribe = db.collection('healthEntries')
+          .orderBy('date', 'desc')
+          .onSnapshot((snapshot) => {
+            const data = [];
+            snapshot.forEach((doc) => {
+              data.push({ id: doc.id, ...doc.data() });
+            });
+            setEntries(data);
+            setSyncing(false);
+          }, (error) => {
+            console.error("Error loading data:", error);
+            setSyncing(false);
+          });
+
+        return () => unsubscribe();
+      }, []);
+
+      // Check if we should prompt for yesterday's data
+      useEffect(() => {
+        const yesterday = getYesterdayDate();
         
-        // Check if user has logged today
-        const today = new Date().toISOString().split('T')[0];
-        const hasLoggedToday = stored && JSON.parse(stored).some(entry => entry.date === today);
-        
-        if (!hasLoggedToday) {
-          setShowModal(true);
+        // Always check if yesterday's data exists in Firestore when component mounts
+        if (entries.length > 0 || entries.length === 0) {
+          db.collection('healthEntries')
+            .where('date', '==', yesterday)
+            .get()
+            .then((snapshot) => {
+              if (snapshot.empty) {
+                // No entry for yesterday, prompt user
+                setFormData(prev => ({ ...prev, date: yesterday }));
+                setShowModal(true);
+              }
+            });
         }
       }, []);
 
-      // Save to memory whenever entries change
-      useEffect(() => {
-        if (entries.length > 0) {
-          localStorage.setItem('healthEntries', JSON.stringify(entries));
+      const loadEntriesFromFirestore = async () => {
+        setSyncing(true);
+        try {
+          const snapshot = await db.collection('healthEntries')
+            .orderBy('date', 'desc')
+            .get();
+          
+          const data = [];
+          snapshot.forEach((doc) => {
+            data.push({ id: doc.id, ...doc.data() });
+          });
+          setEntries(data);
+        } catch (error) {
+          console.error("Error loading entries:", error);
+          alert("Error loading data. Please refresh the page.");
         }
-      }, [entries]);
+        setSyncing(false);
+      };
 
       const handleInputChange = (e) => {
         const { name, value } = e.target;
         setFormData(prev => ({ ...prev, [name]: value }));
       };
 
-      const handleSubmit = () => {
-        // Check if entry for this date already exists
-        const existingIndex = entries.findIndex(entry => entry.date === formData.date);
+      const handleSubmit = async () => {
+        setSyncing(true);
         
-        if (existingIndex >= 0) {
-          // Update existing entry
-          const updated = [...entries];
-          updated[existingIndex] = formData;
-          setEntries(updated);
-        } else {
-          // Add new entry
-          setEntries(prev => [...prev, formData].sort((a, b) => 
-            new Date(b.date) - new Date(a.date)
-          ));
+        try {
+          // Check if entry for this date already exists
+          const existingSnapshot = await db.collection('healthEntries')
+            .where('date', '==', formData.date)
+            .get();
+          
+          if (!existingSnapshot.empty) {
+            // Update existing entry
+            const docId = existingSnapshot.docs[0].id;
+            await db.collection('healthEntries').doc(docId).update(formData);
+          } else {
+            // Add new entry
+            await db.collection('healthEntries').add(formData);
+          }
+          
+          setShowModal(false);
+          
+          // Reset form for next entry (default to yesterday)
+          setFormData({
+            date: getYesterdayDate(),
+            timeSlept: '',
+            weight: '',
+            calorieBurn: '',
+            activityCalorieBurn: '',
+            steps: '',
+            zepboundDosage: '',
+            marijuanaUsage: 'No',
+            zoloft: 'No',
+            bingeEating: 'No',
+            happinessRating: '5'
+          });
+        } catch (error) {
+          console.error("Error saving entry:", error);
+          alert("Error saving data. Please try again.");
         }
         
-        setShowModal(false);
-        
-        // Reset form for next entry
-        setFormData({
-          date: new Date().toISOString().split('T')[0],
-          timeSlept: '',
-          weight: '',
-          calorieBurn: '',
-          activityCalorieBurn: '',
-          steps: '',
-          zepboundDosage: '',
-          marijuanaUsage: 'No',
-          bingeEating: 'No',
-          happinessRating: '5'
-        });
+        setSyncing(false);
       };
 
       const exportToCSV = () => {
@@ -137,6 +223,7 @@
           'Steps',
           'Zepbound Dosage (mg)',
           'Marijuana Usage',
+          'Zoloft',
           'Binge Eating',
           'Happiness Rating'
         ];
@@ -152,6 +239,7 @@
             entry.steps,
             entry.zepboundDosage,
             entry.marijuanaUsage,
+            entry.zoloft || 'No',
             entry.bingeEating,
             entry.happinessRating
           ].join(','))
@@ -200,7 +288,21 @@
                   </div>
                   <div>
                     <h1 className="text-3xl font-bold text-gray-800">Daily Health Tracker</h1>
-                    <p className="text-gray-600">Track your daily health metrics</p>
+                    <p className="text-gray-600 flex items-center gap-2">
+                      Track your daily health metrics
+                      {syncing && (
+                        <span className="text-xs bg-blue-100 text-blue-700 px-2 py-1 rounded-full flex items-center gap-1">
+                          <Cloud size={12} />
+                          Syncing...
+                        </span>
+                      )}
+                      {!syncing && entries.length > 0 && (
+                        <span className="text-xs bg-green-100 text-green-700 px-2 py-1 rounded-full flex items-center gap-1">
+                          <Cloud size={12} />
+                          Synced
+                        </span>
+                      )}
+                    </p>
                   </div>
                 </div>
                 <div className="flex gap-3">
@@ -285,13 +387,14 @@
                         <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700">Steps</th>
                         <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700">Zepbound (mg)</th>
                         <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700">Marijuana</th>
+                        <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700">Zoloft</th>
                         <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700">Binge</th>
                         <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700">Happiness</th>
                       </tr>
                     </thead>
                     <tbody>
                       {entries.map((entry, idx) => (
-                        <tr key={idx} className="border-b border-gray-100 hover:bg-gray-50 transition-colors">
+                        <tr key={entry.id || idx} className="border-b border-gray-100 hover:bg-gray-50 transition-colors">
                           <td className="px-4 py-3 text-sm text-gray-800 font-medium">{entry.date}</td>
                           <td className="px-4 py-3 text-sm text-gray-700">{entry.timeSlept}</td>
                           <td className="px-4 py-3 text-sm text-gray-700">{entry.weight}</td>
@@ -304,6 +407,13 @@
                               entry.marijuanaUsage === 'Yes' ? 'bg-yellow-100 text-yellow-800' : 'bg-gray-100 text-gray-800'
                             }`}>
                               {entry.marijuanaUsage}
+                            </span>
+                          </td>
+                          <td className="px-4 py-3 text-sm">
+                            <span className={`px-2 py-1 rounded-full text-xs font-semibold ${
+                              entry.zoloft === 'Yes' ? 'bg-blue-100 text-blue-800' : 'bg-gray-100 text-gray-800'
+                            }`}>
+                              {entry.zoloft || 'No'}
                             </span>
                           </td>
                           <td className="px-4 py-3 text-sm">
@@ -442,6 +552,19 @@
                       </div>
 
                       <div>
+                        <label className="block text-sm font-semibold text-gray-700 mb-2">Zoloft</label>
+                        <select
+                          name="zoloft"
+                          value={formData.zoloft}
+                          onChange={handleInputChange}
+                          className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+                        >
+                          <option value="No">No</option>
+                          <option value="Yes">Yes</option>
+                        </select>
+                      </div>
+
+                      <div>
                         <label className="block text-sm font-semibold text-gray-700 mb-2">Binge Eating Behaviors</label>
                         <select
                           name="bingeEating"
@@ -478,14 +601,16 @@
                       <button
                         type="button"
                         onClick={handleSubmit}
-                        className="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-3 rounded-xl font-semibold transition-colors"
+                        disabled={syncing}
+                        className="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-3 rounded-xl font-semibold transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                       >
-                        Save Entry
+                        {syncing ? 'Saving...' : 'Save Entry'}
                       </button>
                       <button
                         type="button"
                         onClick={() => setShowModal(false)}
-                        className="flex-1 bg-gray-200 hover:bg-gray-300 text-gray-800 px-6 py-3 rounded-xl font-semibold transition-colors"
+                        disabled={syncing}
+                        className="flex-1 bg-gray-200 hover:bg-gray-300 text-gray-800 px-6 py-3 rounded-xl font-semibold transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                       >
                         Cancel
                       </button>
